@@ -1,0 +1,13 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const src=fs.readFileSync('analysis-modes.js','utf8');
+const fn=src.slice(src.indexOf('function videoSampleTimes('));
+const c=vm.createContext({Math,Number,Array,Error});
+vm.runInContext(fn,c);
+const sample=(...args)=>Array.from(vm.runInContext('videoSampleTimes('+args.map(x=>JSON.stringify(x)).join(',')+')',c));
+assert.deepEqual(sample(0,4,'equal',.5,4),[0,1,2,3,4]);
+assert.deepEqual(sample(1,3,'equal',.5,2),[1,2,3]);
+assert.deepEqual(sample(0,3.5,'equal',.5,5),[0,.7,1.4,2.1,2.8,3.5]);
+assert.deepEqual(sample(0,2,'interval',.5,4),[0,.5,1,1.5,2]);
+assert.throws(()=>sample(3,2,'equal',.5,4));
+assert.throws(()=>sample(0,4,'equal',.5,7));
+console.log('PASS: A–B equal subdivisions, endpoints, interval compatibility, invalid input');
