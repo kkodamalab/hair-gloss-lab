@@ -32,3 +32,36 @@ function comparePatchSizes(scene,sizes=[64,128],overlap=50){
 }
 function videoSeek(video,time){return new Promise((resolve,reject)=>{let settled=false;const cleanup=()=>{video.removeEventListener('seeked',ok);video.removeEventListener('error',bad)};const ok=()=>{if(settled)return;settled=true;cleanup();resolve()};const bad=()=>{if(settled)return;settled=true;cleanup();reject(Error('動画シーク失敗'))};video.addEventListener('seeked',ok,{once:true});video.addEventListener('error',bad,{once:true});video.currentTime=time;if(Math.abs(video.currentTime-time)<.00001&&!video.seeking){cleanup();resolve()}})}
 function temporalSummary(rows,key){const valid=rows.map(r=>r[key]).filter(Number.isFinite);return {...stats(valid),n:valid.length}}
+
+const COMMON_PSD_BAND=[4/64,0.25]; // cycles / original image pixel
+function refitPsdBand(psdResult,band=COMMON_PSD_BAND){
+ const [low,high]=band;
+ if(!(low>0&&high>low&&high<=0.5))throw Error('PSD帯域が不正です');
+ const points=psdResult.points.filter(p=>p[0]>=Math.log10(low)-1e-12&&p[0]<=Math.log10(high)+1e-12);
+ const fit=regress(points);
+ return {beta:fit.slope===null?null:-fit.slope,r2:fit.r2,nBins:points.length,fit,band:[low,high]};
+}
+function commonPsdPatchSummary(result,band=COMMON_PSD_BAND){
+ const rows=result.patches.map(z=>({...refitPsdBand(z.psd,band),roi:z.roi}));
+ const valid=rows.map(z=>z.beta).filter(Number.isFinite);
+ const summary=stats(valid);
+ return {beta:summary.mean,betaSD:summary.sd,patchCount:valid.length,totalPatches:rows.length,r2Mean:stats(rows.map(z=>z.r2).filter(Number.isFinite)).mean,nBins:rows[0]?.nBins??0,band,rows};
+}
+function commonPsdSizeComparison(scene,sizes=[64,128],overlap=50,band=COMMON_PSD_BAND){
+ if(!scene.hairMask)throw Error('毛髪マスクが必要です');
+ const originalSize=$('patchSize').value,originalOverlap=$('patchOverlap').value;
+ const results=[];
+ try{
+ $('patchOverlap').value=String(overlap);
+ for(const size of sizes){
+ $('patchSize').value=String(size);
+ const analysis=runPatchMode(scene,size);
+ const summary=commonPsdPatchSummary(analysis,band);
+ const area=maskBounds(scene.hairMask).area,covered=new Uint8Array(scene.hairMask.w*scene.hairMask.h);
+ for(const z of analysis.patches){const r=z.roi;for(let y=r.y;y<r.y+r.h;y++)for(let x=r.x;x<r.x+r.w;x++)covered[y*scene.hairMask.w+x]=1}
+ let count=0;for(const a of covered)count+=a;
+ results.push({size,commonBeta:summary.beta,commonBetaSD:summary.betaSD,commonR2:summary.r2Mean,commonBins:summary.nBins,originalBeta:analysis.psd.value,originalBetaSD:analysis.psdSD,deltaBeta:summary.beta-analysis.psd.value,patchCount:summary.patchCount,coverage:count/area,bandLow:band[0],bandHigh:band[1],patches:summary.rows});
+ }
+ }finally{$('patchSize').value=originalSize;$('patchOverlap').value=originalOverlap}
+ return results;
+}

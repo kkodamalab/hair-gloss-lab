@@ -80,6 +80,36 @@ $('legend').onchange=$('fits').onchange=renderResults;
 function save(name,data,type){let u=URL.createObjectURL(new Blob([data],{type})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),10000)}function saveCanvas(c,name){c.toBlob(b=>b&&save(name,b,'image/png'))}
 $('heatMetric').onchange=()=>{scenes.forEach(s=>s.display&&draw(s))};
 $('compareSizes').onclick=()=>{const out=[];for(let [i,s] of scenes.slice(0,count).entries()){if(!s.frame||!s.hairMask)continue;try{for(const r of comparePatchSizes(s))out.push({scene:String.fromCharCode(65+i),...r})}catch(e){message(String.fromCharCode(65+i)+': '+e.message)}}window.sizeComparison=out;const box=$('sizeResults');box.replaceChildren();if(!out.length)return message('比較対象がありません。毛髪マスクを確認してください');const table=document.createElement('table'),head=document.createElement('tr');for(const k of ['scene','size','patchCount','coverage','beta','betaSD','D','DSD','psdR2','dbcR2','dbcScales']){let th=document.createElement('th');th.textContent=k;head.append(th)}table.append(head);for(const r of out){let tr=document.createElement('tr');for(const k of ['scene','size','patchCount','coverage','beta','betaSD','D','DSD','psdR2','dbcR2','dbcScales']){let td=document.createElement('td');td.textContent=typeof r[k]==='number'?Number(r[k].toFixed(5)):r[k];tr.append(td)}table.append(tr)}box.append(table);message('64px・128pxを元解像度で比較しました。比較は同一スケール推定ではありません。')};
+$('compareCommon').onclick=()=>{
+ const out=[],patchRows=[],errors=[];
+ for(let [i,s] of scenes.slice(0,count).entries()){
+  if(!s.frame||!s.hairMask)continue;
+  try{
+   for(const r of commonPsdSizeComparison(s)){
+    out.push({scene:String.fromCharCode(65+i),size:r.size,bandLow:r.bandLow,bandHigh:r.bandHigh,commonBeta:r.commonBeta,commonBetaSD:r.commonBetaSD,commonR2:r.commonR2,commonBins:r.commonBins,originalBeta:r.originalBeta,originalBetaSD:r.originalBetaSD,deltaBeta:r.deltaBeta,patchCount:r.patchCount,coverage:r.coverage});
+    r.patches.forEach((p,j)=>patchRows.push({scene:String.fromCharCode(65+i),size:r.size,patch:j+1,x:p.roi.x,y:p.roi.y,commonBeta:p.beta,commonR2:p.r2,bins:p.nBins}));
+   }
+  }catch(e){errors.push(String.fromCharCode(65+i)+': '+e.message)}
+ }
+ window.commonComparison=out;window.commonPatchRows=patchRows;
+ const box=$('commonResults');box.replaceChildren();
+ if(out.length){
+  const keys=['scene','size','commonBeta','commonBetaSD','commonR2','commonBins','originalBeta','deltaBeta','patchCount','coverage'];
+  const t=document.createElement('table'),head=document.createElement('tr');
+  for(const k of keys){let th=document.createElement('th');th.textContent=k;head.append(th)}t.append(head);
+  for(const r of out){let tr=document.createElement('tr');for(const k of keys){let td=document.createElement('td');td.textContent=typeof r[k]==='number'?Number(r[k].toFixed(5)):r[k];tr.append(td)}t.append(tr)}box.append(t);
+  const note=document.createElement('p');note.textContent='共通帯域 0.0625–0.25 cycles/pixel。64px・128pxは周波数ビン数と空間的な被覆が異なります。共通帯域βは各パッチの回帰傾きの平均です。';box.append(note);
+ }
+ message((out.length?'共通PSD帯域の再推定が完了しました。':'解析対象がありません。')+(errors.length?' '+errors.join(' / '):''));
+};
+$('saveCommon').onclick=()=>{
+ const rows=window.commonComparison||[];if(!rows.length)return message('先に共通PSD帯域比較を実行してください');
+ const keys=Object.keys(rows[0]);save('common-band-comparison.csv',csv([keys,...rows.map(r=>keys.map(k=>r[k]))]),'text/csv;charset=utf-8');
+};
+$('saveCommonPatches').onclick=()=>{
+ const rows=window.commonPatchRows||[];if(!rows.length)return message('先に共通PSD帯域比較を実行してください');
+ const keys=Object.keys(rows[0]);save('common-band-patches.csv',csv([keys,...rows.map(r=>keys.map(k=>r[k]))]),'text/csv;charset=utf-8');
+};
 $('saveSizes').onclick=()=>{const rows=window.sizeComparison||[];if(!rows.length)return message('先にサイズ比較を実行してください');const keys=Object.keys(rows[0]);save('size-comparison.csv',csv([keys,...rows.map(r=>keys.map(k=>r[k]))]),'text/csv;charset=utf-8')};
 $('spatialCSV').onclick=()=>{const rows=[['scene','patch_id','center_x_normalized','center_y_normalized','x','y','beta','D']];scenes.slice(0,count).forEach((s,i)=>patchSpatialRows(s.result,s.hairMask).forEach(r=>rows.push([String.fromCharCode(65+i),r.id,r.cx,r.cy,r.x,r.y,r.beta,r.D])));save('spatial-patches.csv',csv(rows),'text/csv;charset=utf-8')};
 $('videoRun').onclick=async()=>{const btn=$('videoRun'),video=$('video');if(!current||current.type!=='video')return message('動画を選択してください');const start=+$('videoStart').value,end=+$('videoEnd').value,step=+$('videoStep').value,side=+$('patchSize').value;if(!(step>0&&end>=start&&start>=0&&end<=video.duration))return message('開始・終了・間隔を確認してください');const frames=Math.floor((end-start)/step)+1;if(frames>120)return message('最大120フレームです。間隔を広げてください');btn.disabled=true;const original=video.currentTime,rows=[];try{video.pause();for(let i=0;i<frames;i++){const t=Math.min(end,start+i*step);await videoSeek(video,t);const frame=canvas(video.videoWidth,video.videoHeight);frame.getContext('2d').drawImage(video,0,0);const scene={frame,hairMask:hairMaskAuto(frame)};try{const r=runPatchMode(scene,side);rows.push({time:t,patchCount:r.patchCount,beta:r.psd.value,betaSD:r.psdSD,D:r.dbc.value,DSD:r.dbcSD,maskArea:maskBounds(scene.hairMask).area,status:'ok'})}catch(e){rows.push({time:t,patchCount:0,beta:null,betaSD:null,D:null,DSD:null,maskArea:0,status:e.message})}message('動画解析 '+(i+1)+' / '+frames);await new Promise(resolve=>setTimeout(resolve,0))}window.videoRows=rows;const chart=$('temporalPlot'),ctx=chart.getContext('2d');ctx.clearRect(0,0,chart.width,chart.height);ctx.fillStyle='#0d1a2b';ctx.fillRect(0,0,chart.width,chart.height);const plot=(key,color,y0,y1)=>{const valid=rows.filter(r=>Number.isFinite(r[key]));if(!valid.length)return;const lo=Math.min(...valid.map(r=>r[key])),hi=Math.max(...valid.map(r=>r[key]));ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();valid.forEach((r,j)=>{const x=45+(r.time-start)/(end-start||1)*(chart.width-65),y=y1-(r[key]-lo)/(hi-lo||1)*(y1-y0);j?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke();ctx.fillStyle=color;ctx.fillText(key+' ['+lo.toFixed(3)+', '+hi.toFixed(3)+']',45,y0-5)};plot('beta','#56b4e9',35,160);plot('D','#e69f00',220,345);const summary=temporalSummary(rows,'beta'),ds=temporalSummary(rows,'D');$('videoSummary').textContent='解析 '+rows.length+'フレーム / 有効 '+summary.n+'フレーム。β 平均 '+fmt(summary.mean)+' SD '+fmt(summary.sd)+'、D 平均 '+fmt(ds.mean)+' SD '+fmt(ds.sd)+'。各フレームで自動抽出し直すためマスク品質の目視検証が必要です。'}catch(e){message('動画解析エラー: '+e.message)}finally{try{await videoSeek(video,original)}catch(e){}btn.disabled=false}};
