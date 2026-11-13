@@ -65,3 +65,15 @@ function commonPsdSizeComparison(scene,sizes=[64,128],overlap=50,band=COMMON_PSD
  }finally{$('patchSize').value=originalSize;$('patchOverlap').value=originalOverlap}
  return results;
 }
+
+function videoSampleTimes(start,end,mode,step,divisions){
+ if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start)throw Error('BはAより後の時刻を指定してください');
+ if(mode==='equal'){
+  if(!Number.isInteger(divisions)||divisions<2||divisions>6)throw Error('分割数は2～6を指定してください');
+  return Array.from({length:divisions+1},(_,i)=>i===divisions?end:start+(end-start)*i/divisions);
+ }
+ if(!(step>0))throw Error('抽出間隔は0より大きくしてください');
+ const n=Math.floor((end-start)/step+1e-10)+1;
+ if(n>120)throw Error('最大120フレームです。間隔を広げてください');
+ return Array.from({length:n},(_,i)=>start+i*step);
+}
