@@ -3,7 +3,8 @@ const $=id=>document.getElementById(id), colors=['#56b4e9','#e69f00','#009e73','
 const scenes=Array.from({length:9},(_,i)=>({name:String.fromCharCode(65+i),gray:true,visible:true}));let count=2, sources=[],current=null;
 const message=t=>$('status').textContent=t;
 const button=(label,fn,parent)=>{let b=document.createElement('button');b.textContent=label;b.onclick=fn;parent.append(b);return b};
-function invalidate(s){s.result=null;s.roiCanvas=null;renderResults()}
+function invalidate(s){s.result=null;s.roiCanvas=null;renderResults();if(s.roiInfo)updateRoiInfo(s)}
+function updateRoiInfo(s){if(!s.roiInfo)return;const r=s.roi;s.roiInfo.textContent=r?`ROI: x=${r.x}, y=${r.y}, ${r.w} × ${r.h} px（面積 ${r.w*r.h} px²） / 解析出力 ${$('resolution').value} × ${$('resolution').value} px`:'ROI: 未設定（解析時は画像中央の正方形を使用）'}
 function canvas(w,h){let c=document.createElement('canvas');c.width=w;c.height=h;return c}
 function mono(c){let ctx=c.getContext('2d'),im=ctx.getImageData(0,0,c.width,c.height);for(let i=0;i<im.data.length;i+=4){let y=Math.round(.2126*im.data[i]+.7152*im.data[i+1]+.0722*im.data[i+2]);im.data[i]=im.data[i+1]=im.data[i+2]=y;im.data[i+3]=255}ctx.putImageData(im,0,0);return im}
 
@@ -38,14 +39,19 @@ function maskBrush(s,x,y,add,radius){
  for(let yy=y0;yy<=y1;yy++)for(let xx=x0;xx<=x1;xx++)if((xx-x)**2+(yy-y)**2<=r*r)mask[yy*w+xx]=add?1:0;
 }
 function maskInteriorSquare(s,n){
- const {mask,w,h}=s.hairMask;const inset=Math.max(4,Math.round(Math.min(w,h)*.015));
- // Largest all-hair square, bounded by requested native resolution; O(wh).
+ const {mask,w,h}=s.hairMask;
+ const inset=Math.max(4,Math.round(Math.min(w,h)*.015));
+ // DP: largest square entirely inside the binary mask.
  const prev=new Uint32Array(w+1),cur=new Uint32Array(w+1);let best=0,bx=0,by=0;
- for(let y=0;y<h;y++){cur.fill(0);for(let x=0;x<w;x++)if(mask[y*w+x]){let v=1+Math.min(prev[x],prev[x+1],cur[x]);cur[x+1]=v;if(v>best){best=v;bx=x-v+1;by=y-v+1}}prev.set(cur)}
- const side=Math.min(best-2*inset,Math.max(n,Math.floor(Math.min(w,h)*.35)));
- if(side<32)throw Error('毛髪内に十分な正方形がありません。マスクを修正してください');
- const sz=Math.floor(side),cx=bx+best/2,cy=by+best/2;
- s.roi={x:Math.round(cx-sz/2),y:Math.round(cy-sz/2),w:sz,h:sz};invalidate(s);draw(s);
+ for(let y=0;y<h;y++){cur.fill(0);for(let x=0;x<w;x++)if(mask[y*w+x]){
+  const v=1+Math.min(prev[x],prev[x+1],cur[x]);cur[x+1]=v;
+  if(v>best){best=v;bx=x-v+1;by=y-v+1}
+ }prev.set(cur)}
+ const sz=Math.floor(n);
+ if(best<sz+2*inset)throw Error('毛髪内に'+sz+'×'+sz+'pxのROIが収まりません（最大 '+Math.max(0,best-2*inset)+'px）。解像度を下げるか手動調整してください。');
+ const cx=bx+best/2,cy=by+best/2;
+ s.roi={x:Math.round(cx-sz/2),y:Math.round(cy-sz/2),w:sz,h:sz};
+ invalidate(s);draw(s);
 }
 function downloadMask(s,name){
  if(!s.hairMask)return;let {mask,w,h}=s.hairMask,c=canvas(w,h),ctx=c.getContext('2d'),im=ctx.createImageData(w,h);
@@ -61,7 +67,7 @@ function render(){ $('scenes').replaceChildren();scenes.slice(0,count).forEach((
  let radius=document.createElement('input');radius.type='range';radius.min='3';radius.max='90';radius.value='20';radius.title='ブラシ半径（元画像px）';maskbar.append(radius);
  button('毛髪内に正方形ROI',()=>{try{if(!s.hairMask)throw Error('先に毛髪を抽出してください');maskInteriorSquare(s,+$('resolution').value)}catch(e){message(e.message)}},maskbar);
  button('マスクPNG',()=>downloadMask(s,String.fromCharCode(65+i)+'_hair_mask.png'),maskbar);
- let c=canvas(640,360);s.display=c;p.append(c);let start;const point=e=>{let r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(c.width,(e.clientX-r.left)*c.width/r.width)),y:Math.max(0,Math.min(c.height,(e.clientY-r.top)*c.height/r.height))}};c.onpointerdown=e=>{if(!s.frame)return;start=point(e);c.setPointerCapture(e.pointerId);if(s.editMask&&s.hairMask){maskBrush(s,start.x,start.y,mode.value==='add',+radius.value);invalidate(s);draw(s)}};c.onpointermove=e=>{if(!start)return;let q=point(e);if(s.editMask&&s.hairMask){maskBrush(s,q.x,q.y,mode.value==='add',+radius.value);invalidate(s);draw(s);return}let z=Math.min(Math.abs(q.x-start.x),Math.abs(q.y-start.y));s.roi={x:Math.round(Math.min(start.x,q.x)),y:Math.round(Math.min(start.y,q.y)),w:Math.floor(z),h:Math.floor(z)};if(q.x<start.x)s.roi.x=Math.round(start.x-z);if(q.y<start.y)s.roi.y=Math.round(start.y-z);invalidate(s);draw(s)};c.onpointerup=c.onpointercancel=()=>start=null;draw(s);if(s.roiCanvas){let preview=canvas(s.roiCanvas.width,s.roiCanvas.height);preview.getContext('2d').drawImage(s.roiCanvas,0,0);p.append('解析入力（保存PNGと同じ）',preview);button('ROI PNG',()=>saveCanvas(s.roiCanvas,String.fromCharCode(65+i)+'_roi.png'),p)}})}
+ let info=document.createElement('div');info.style.cssText='margin:8px 0;color:#d9efff;font-size:14px';s.roiInfo=info;p.append(info);updateRoiInfo(s);let c=canvas(640,360);s.display=c;p.append(c);let start;const point=e=>{let r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(c.width,(e.clientX-r.left)*c.width/r.width)),y:Math.max(0,Math.min(c.height,(e.clientY-r.top)*c.height/r.height))}};c.onpointerdown=e=>{if(!s.frame)return;start=point(e);c.setPointerCapture(e.pointerId);if(s.editMask&&s.hairMask){maskBrush(s,start.x,start.y,mode.value==='add',+radius.value);invalidate(s);draw(s)}};c.onpointermove=e=>{if(!start)return;let q=point(e);if(s.editMask&&s.hairMask){maskBrush(s,q.x,q.y,mode.value==='add',+radius.value);invalidate(s);draw(s);return}let z=Math.min(Math.abs(q.x-start.x),Math.abs(q.y-start.y));s.roi={x:Math.round(Math.min(start.x,q.x)),y:Math.round(Math.min(start.y,q.y)),w:Math.floor(z),h:Math.floor(z)};if(q.x<start.x)s.roi.x=Math.round(start.x-z);if(q.y<start.y)s.roi.y=Math.round(start.y-z);invalidate(s);draw(s)};c.onpointerup=c.onpointercancel=()=>start=null;draw(s);updateRoiInfo(s);updateRoiInfo(s);if(s.roiCanvas){let preview=canvas(s.roiCanvas.width,s.roiCanvas.height);preview.getContext('2d').drawImage(s.roiCanvas,0,0);p.append('解析入力（保存PNGと同じ）',preview);button('ROI PNG',()=>saveCanvas(s.roiCanvas,String.fromCharCode(65+i)+'_roi.png'),p)}})}
 for(let i=2;i<=9;i++)$('count').add(new Option(String(i),String(i)));$('count').value=String(count);$('count').onchange=()=>{count=+$('count').value;render();renderResults()};$('gray').onchange=()=>{scenes.forEach(s=>s.gray=$('gray').checked);render()};$('resolution').onchange=()=>{scenes.forEach(invalidate);render()};
 $('files').onchange=e=>{for(let file of e.target.files){let type=file.type.startsWith('video/')||/\.(mov|mp4|m4v|webm)$/i.test(file.name)?'video':'image';sources.push({file,type,url:URL.createObjectURL(file)});$('source').add(new Option(file.name,sources.length-1))}if(sources.length)loadSource(+$('source').value)};
 function loadSource(i){current=sources[i];$('video').pause();$('video').removeAttribute('src');$('image').removeAttribute('src');$('video').hidden=current.type!=='video';$('image').hidden=current.type!=='image';$(current.type).src=current.url;message('読み込み中: '+current.file.name)}
