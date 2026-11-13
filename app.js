@@ -30,7 +30,6 @@ function hairMaskAuto(frame){
    for(let q of [v-1,v+1,v-w,v+w]){if(q<0||q>=total||seen[q]||!candidate[q])continue;let qx=q%w,qy=(q/w)|0;if(Math.abs(qx-vx)+Math.abs(qy-vy)!==1)continue;seen[q]=1;queue[tail++]=q}}
   const center=(minX+maxX)/2,score=tail*(top<h*.55?1:0.1)*(Math.abs(center-w/2)<w*.32?1:.25);
   if(score>bestScore){bestScore=score;bestComponent=Array.from(queue.subarray(0,tail))}}
- }
  const mask=new Uint8Array(total);for(const i of bestComponent)mask[i]=1;
  return {mask,w,h,threshold:thr};
 }
