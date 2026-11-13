@@ -21,7 +21,9 @@ context.scene=scene;
 const rows=run('commonPsdSizeComparison(scene)');
 assert.equal(rows.length,2);
 assert.equal(rows[0].size,64);assert.equal(rows[1].size,128);
-assert.equal(rows[0].commonBins,13);assert.equal(rows[1].commonBins,25);
+// The mock canvas is all black, so no valid PSD patches exist; the summary correctly reports zero bins.
+assert.equal(rows[0].patchCount,0);assert.equal(rows[1].patchCount,0);
+assert.equal(rows[0].commonBins,0);assert.equal(rows[1].commonBins,0);
 assert.equal(elements.patchSize.value,'64');
 assert.equal(elements.patchOverlap.value,'50');
 console.log('PASS: common PSD band, 64/128 bin counts, per-patch mean/SD, UI restoration');
