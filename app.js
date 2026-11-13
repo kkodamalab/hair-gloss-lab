@@ -6,8 +6,63 @@ const button=(label,fn,parent)=>{let b=document.createElement('button');b.textCo
 function invalidate(s){s.result=null;s.roiCanvas=null;renderResults()}
 function canvas(w,h){let c=document.createElement('canvas');c.width=w;c.height=h;return c}
 function mono(c){let ctx=c.getContext('2d'),im=ctx.getImageData(0,0,c.width,c.height);for(let i=0;i<im.data.length;i+=4){let y=Math.round(.2126*im.data[i]+.7152*im.data[i+1]+.0722*im.data[i+2]);im.data[i]=im.data[i+1]=im.data[i+2]=y;im.data[i+3]=255}ctx.putImageData(im,0,0);return im}
-function draw(s){let c=s.display,f=s.frame;if(!f)return;c.width=f.width;c.height=f.height;c.getContext('2d').drawImage(f,0,0);if(s.gray)mono(c);if(s.roi){let r=s.roi,x=c.getContext('2d');x.strokeStyle='#00ffb3';x.lineWidth=Math.max(2,c.width/250);x.strokeRect(r.x,r.y,r.w,r.h)}}
-function render(){ $('scenes').replaceChildren();scenes.slice(0,count).forEach((s,i)=>{let p=document.createElement('div');p.className='panel';$('scenes').append(p);let title=document.createElement('h3');title.textContent=String.fromCharCode(65+i);p.append(title);let name=document.createElement('input');name.value=s.name;name.setAttribute('aria-label','シーン名');name.oninput=()=>{s.name=name.value;renderResults()};p.append(name);button('現在の入力を登録',()=>{try{let src=current?.type==='video'?$('video'):$('image');if(!current||!src.complete&&current.type==='image'||current.type==='video'&&(src.readyState<2||src.seeking))throw Error('入力の読み込み／シーク完了を待ってください');let w=src.videoWidth||src.naturalWidth,h=src.videoHeight||src.naturalHeight;if(!w||!h)throw Error('画像をデコードできません');s.frame=canvas(w,h);let ctx=s.frame.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,w,h);ctx.drawImage(src,0,0);s.file=current.file.name;s.time=current.type==='video'?src.currentTime:null;s.roi=null;invalidate(s);draw(s)}catch(e){message(e.message)}},p);let g=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.checked=s.gray;check.onchange=()=>{s.gray=check.checked;draw(s)};g.append(check,'モノクロ表示');p.append(g);let vis=document.createElement('input');vis.type='checkbox';vis.checked=s.visible;vis.onchange=()=>{s.visible=vis.checked;renderResults()};p.append(vis,'曲線表示');button('ROI解除',()=>{s.roi=null;invalidate(s);draw(s)},p);button('削除',()=>{s.frame=null;s.roi=null;invalidate(s);render()},p);button('次と入れ替え',()=>{let j=(i+1)%count;[scenes[i],scenes[j]]=[scenes[j],scenes[i]];render();renderResults()},p);let c=canvas(640,360);s.display=c;p.append(c);let start;const point=e=>{let r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(c.width,(e.clientX-r.left)*c.width/r.width)),y:Math.max(0,Math.min(c.height,(e.clientY-r.top)*c.height/r.height))}};c.onpointerdown=e=>{if(!s.frame)return;start=point(e);c.setPointerCapture(e.pointerId)};c.onpointermove=e=>{if(!start)return;let q=point(e),z=Math.min(Math.abs(q.x-start.x),Math.abs(q.y-start.y));s.roi={x:Math.round(Math.min(start.x,q.x)),y:Math.round(Math.min(start.y,q.y)),w:Math.floor(z),h:Math.floor(z)};if(q.x<start.x)s.roi.x=Math.round(start.x-z);if(q.y<start.y)s.roi.y=Math.round(start.y-z);invalidate(s);draw(s)};c.onpointerup=c.onpointercancel=()=>start=null;draw(s);if(s.roiCanvas){let preview=canvas(s.roiCanvas.width,s.roiCanvas.height);preview.getContext('2d').drawImage(s.roiCanvas,0,0);p.append('解析入力（保存PNGと同じ）',preview);button('ROI PNG',()=>saveCanvas(s.roiCanvas,String.fromCharCode(65+i)+'_roi.png'),p)}})}
+
+// Hair mask: dark connected component in upper image; manual brush correction.
+// The mask is for selecting an interior square ROI, not for zero-masking FFT input.
+function hairMaskAuto(frame){
+ const w=frame.width,h=frame.height,ctx=frame.getContext('2d'),d=ctx.getImageData(0,0,w,h).data;
+ const lum=new Uint8Array(w*h),hist=new Uint32Array(256);
+ for(let i=0;i<lum.length;i++){const j=i*4;let v=Math.round(.2126*d[j]+.7152*d[j+1]+.0722*d[j+2]);lum[i]=v;hist[v]++}
+ // Otsu threshold capped to avoid including gray clothing.
+ let sum=0,total=w*h;for(let k=0;k<256;k++)sum+=k*hist[k];
+ let b=0,wb=0,best=0,thr=110;
+ for(let k=0;k<256;k++){wb+=hist[k];if(!wb||wb===total)continue;b+=k*hist[k];let m0=b/wb,m1=(sum-b)/(total-wb),score=wb*(total-wb)*(m0-m1)**2;if(score>best){best=score;thr=k}}
+ thr=Math.max(35,Math.min(135,thr));
+ const candidate=new Uint8Array(total),seen=new Uint8Array(total),queue=new Int32Array(total);
+ const maxY=Math.floor(h*.83);
+ for(let y=0;y<maxY;y++)for(let x=0;x<w;x++){let i=y*w+x;candidate[i]=lum[i]<thr?1:0}
+ let bestComponent=[],bestScore=-1;
+ // Connected components, prefer upper-central region to avoid dark clothing.
+ for(let y=0;y<maxY;y++)for(let x=0;x<w;x++){
+  let idx=y*w+x;if(!candidate[idx]||seen[idx])continue;
+  let head=0,tail=1,top=y,minX=x,maxX=x;queue[0]=idx;seen[idx]=1;
+  while(head<tail){let v=queue[head++],vx=v%w,vy=(v/w)|0;top=Math.min(top,vy);minX=Math.min(minX,vx);maxX=Math.max(maxX,vx);
+   for(let q of [v-1,v+1,v-w,v+w]){if(q<0||q>=total||seen[q]||!candidate[q])continue;let qx=q%w,qy=(q/w)|0;if(Math.abs(qx-vx)+Math.abs(qy-vy)!==1)continue;seen[q]=1;queue[tail++]=q}}
+  const center=(minX+maxX)/2,score=tail*(top<h*.55?1:0.1)*(Math.abs(center-w/2)<w*.32?1:.25);
+  if(score>bestScore){bestScore=score;bestComponent=Array.from(queue.subarray(0,tail))}}
+ }
+ const mask=new Uint8Array(total);for(const i of bestComponent)mask[i]=1;
+ return {mask,w,h,threshold:thr};
+}
+function maskBrush(s,x,y,add,radius){
+ if(!s.hairMask)return;const {mask,w,h}=s.hairMask,r=Math.max(2,radius),x0=Math.max(0,Math.floor(x-r)),x1=Math.min(w-1,Math.ceil(x+r)),y0=Math.max(0,Math.floor(y-r)),y1=Math.min(h-1,Math.ceil(y+r));
+ for(let yy=y0;yy<=y1;yy++)for(let xx=x0;xx<=x1;xx++)if((xx-x)**2+(yy-y)**2<=r*r)mask[yy*w+xx]=add?1:0;
+}
+function maskInteriorSquare(s,n){
+ const {mask,w,h}=s.hairMask;const inset=Math.max(4,Math.round(Math.min(w,h)*.015));
+ // Largest all-hair square, bounded by requested native resolution; O(wh).
+ const prev=new Uint32Array(w+1),cur=new Uint32Array(w+1);let best=0,bx=0,by=0;
+ for(let y=0;y<h;y++){cur.fill(0);for(let x=0;x<w;x++)if(mask[y*w+x]){let v=1+Math.min(prev[x],prev[x+1],cur[x]);cur[x+1]=v;if(v>best){best=v;bx=x-v+1;by=y-v+1}}prev.set(cur)}
+ const side=Math.min(best-2*inset,Math.max(n,Math.floor(Math.min(w,h)*.35)));
+ if(side<32)throw Error('毛髪内に十分な正方形がありません。マスクを修正してください');
+ const sz=Math.floor(side),cx=bx+best/2,cy=by+best/2;
+ s.roi={x:Math.round(cx-sz/2),y:Math.round(cy-sz/2),w:sz,h:sz};invalidate(s);draw(s);
+}
+function downloadMask(s,name){
+ if(!s.hairMask)return;let {mask,w,h}=s.hairMask,c=canvas(w,h),ctx=c.getContext('2d'),im=ctx.createImageData(w,h);
+ for(let i=0;i<mask.length;i++){let j=i*4, v=mask[i]?255:0;im.data[j]=im.data[j+1]=im.data[j+2]=v;im.data[j+3]=255}
+ ctx.putImageData(im,0,0);saveCanvas(c,name);
+}
+
+function draw(s){let c=s.display,f=s.frame;if(!f)return;c.width=f.width;c.height=f.height;c.getContext('2d').drawImage(f,0,0);if(s.gray)mono(c);if(s.hairMask){let {mask,w,h}=s.hairMask,overlay=canvas(w,h),ox=overlay.getContext('2d'),im=ox.createImageData(w,h);for(let i=0;i<mask.length;i++)if(mask[i]){let j=i*4;im.data[j]=0;im.data[j+1]=220;im.data[j+2]=180;im.data[j+3]=65}ox.putImageData(im,0,0);c.getContext('2d').drawImage(overlay,0,0)}if(s.roi){let r=s.roi,x=c.getContext('2d');x.strokeStyle='#00ffb3';x.lineWidth=Math.max(2,c.width/250);x.strokeRect(r.x,r.y,r.w,r.h)}}
+function render(){ $('scenes').replaceChildren();scenes.slice(0,count).forEach((s,i)=>{let p=document.createElement('div');p.className='panel';$('scenes').append(p);let title=document.createElement('h3');title.textContent=String.fromCharCode(65+i);p.append(title);let name=document.createElement('input');name.value=s.name;name.setAttribute('aria-label','シーン名');name.oninput=()=>{s.name=name.value;renderResults()};p.append(name);button('現在の入力を登録',()=>{try{let src=current?.type==='video'?$('video'):$('image');if(!current||!src.complete&&current.type==='image'||current.type==='video'&&(src.readyState<2||src.seeking))throw Error('入力の読み込み／シーク完了を待ってください');let w=src.videoWidth||src.naturalWidth,h=src.videoHeight||src.naturalHeight;if(!w||!h)throw Error('画像をデコードできません');s.frame=canvas(w,h);let ctx=s.frame.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,w,h);ctx.drawImage(src,0,0);s.file=current.file.name;s.time=current.type==='video'?src.currentTime:null;s.roi=null;s.hairMask=null;invalidate(s);draw(s)}catch(e){message(e.message)}},p);let g=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.checked=s.gray;check.onchange=()=>{s.gray=check.checked;draw(s)};g.append(check,'モノクロ表示');p.append(g);let vis=document.createElement('input');vis.type='checkbox';vis.checked=s.visible;vis.onchange=()=>{s.visible=vis.checked;renderResults()};p.append(vis,'曲線表示');button('ROI解除',()=>{s.roi=null;invalidate(s);draw(s)},p);button('削除',()=>{s.frame=null;s.roi=null;s.hairMask=null;invalidate(s);render()},p);button('次と入れ替え',()=>{let j=(i+1)%count;[scenes[i],scenes[j]]=[scenes[j],scenes[i]];render();renderResults()},p);let maskbar=document.createElement('div');maskbar.className='controls';p.append(maskbar);
+ button('毛髪を自動抽出',()=>{if(!s.frame)return message('先に画像を登録してください');s.hairMask=hairMaskAuto(s.frame);s.editMask=false;invalidate(s);draw(s);message('緑の領域を確認し、必要に応じてブラシで修正してください')},maskbar);
+ let edit=document.createElement('input');edit.type='checkbox';edit.onchange=()=>s.editMask=edit.checked;maskbar.append(Object.assign(document.createElement('label'),{textContent:'ブラシ編集'}));maskbar.lastChild.prepend(edit);
+ let mode=document.createElement('select');mode.add(new Option('領域を追加','add'));mode.add(new Option('領域を削除','erase'));maskbar.append(mode);
+ let radius=document.createElement('input');radius.type='range';radius.min='3';radius.max='90';radius.value='20';radius.title='ブラシ半径（元画像px）';maskbar.append(radius);
+ button('毛髪内に正方形ROI',()=>{try{if(!s.hairMask)throw Error('先に毛髪を抽出してください');maskInteriorSquare(s,+$('resolution').value)}catch(e){message(e.message)}},maskbar);
+ button('マスクPNG',()=>downloadMask(s,String.fromCharCode(65+i)+'_hair_mask.png'),maskbar);
+ let c=canvas(640,360);s.display=c;p.append(c);let start;const point=e=>{let r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(c.width,(e.clientX-r.left)*c.width/r.width)),y:Math.max(0,Math.min(c.height,(e.clientY-r.top)*c.height/r.height))}};c.onpointerdown=e=>{if(!s.frame)return;start=point(e);c.setPointerCapture(e.pointerId);if(s.editMask&&s.hairMask){maskBrush(s,start.x,start.y,mode.value==='add',+radius.value);invalidate(s);draw(s)}};c.onpointermove=e=>{if(!start)return;let q=point(e);if(s.editMask&&s.hairMask){maskBrush(s,q.x,q.y,mode.value==='add',+radius.value);invalidate(s);draw(s);return}let z=Math.min(Math.abs(q.x-start.x),Math.abs(q.y-start.y));s.roi={x:Math.round(Math.min(start.x,q.x)),y:Math.round(Math.min(start.y,q.y)),w:Math.floor(z),h:Math.floor(z)};if(q.x<start.x)s.roi.x=Math.round(start.x-z);if(q.y<start.y)s.roi.y=Math.round(start.y-z);invalidate(s);draw(s)};c.onpointerup=c.onpointercancel=()=>start=null;draw(s);if(s.roiCanvas){let preview=canvas(s.roiCanvas.width,s.roiCanvas.height);preview.getContext('2d').drawImage(s.roiCanvas,0,0);p.append('解析入力（保存PNGと同じ）',preview);button('ROI PNG',()=>saveCanvas(s.roiCanvas,String.fromCharCode(65+i)+'_roi.png'),p)}})}
 for(let i=2;i<=9;i++)$('count').add(new Option(i,i));$('count').onchange=()=>{count=+$('count').value;render();renderResults()};$('gray').onchange=()=>{scenes.forEach(s=>s.gray=$('gray').checked);render()};$('resolution').onchange=()=>{scenes.forEach(invalidate);render()};
 $('files').onchange=e=>{for(let file of e.target.files){let type=file.type.startsWith('video/')||/\.(mov|mp4|m4v|webm)$/i.test(file.name)?'video':'image';sources.push({file,type,url:URL.createObjectURL(file)});$('source').add(new Option(file.name,sources.length-1))}if(sources.length)loadSource(+$('source').value)};
 function loadSource(i){current=sources[i];$('video').pause();$('video').removeAttribute('src');$('image').removeAttribute('src');$('video').hidden=current.type!=='video';$('image').hidden=current.type!=='image';$(current.type).src=current.url;message('読み込み中: '+current.file.name)}
