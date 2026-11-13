@@ -1,0 +1,3 @@
+const {psd,dbc,fft}=require('../analysis.js');const assert=require('node:assert/strict');
+for(const n of [128,256,512]){const v=new Float64Array(n*n).fill(0.5);assert.equal(psd(v,n).value,null);assert.ok(Math.abs(dbc(v,n).value-2)<1e-10);const wave=Float64Array.from(v,(_,i)=>.5+.25*Math.cos(2*Math.PI*16*(i%n)/n));const p=psd(wave,n);let peak=p.points.reduce((a,b)=>a[1]>b[1]?a:b);assert.ok(Math.abs(10**peak[0]*n-16)<=1);assert.ok(Number.isFinite(p.value));}
+let re=Float64Array.from([1,0,0,0]),im=new Float64Array(4);fft(re,im);assert.deepEqual([...re],[1,1,1,1]);console.log('PASS: constant D=2, undefined constant PSD, sinusoid peak at 16, impulse FFT; all 3 resolutions');
