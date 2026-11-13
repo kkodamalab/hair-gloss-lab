@@ -12,4 +12,4 @@ jobs:
         with:
           node-version: '22'
       - run: node --check analysis.js && node --check analysis-modes.js && node --check app.js
-      - run: node tests/analysis-modes.test.cjs
+      - run: node tests/analysis-modes.test.cjs && node tests/common-psd-band.test.cjs
