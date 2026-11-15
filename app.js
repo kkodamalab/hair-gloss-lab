@@ -61,7 +61,56 @@ function downloadMask(s,name){
  ctx.putImageData(im,0,0);saveCanvas(c,name);
 }
 
-function draw(s){let c=s.display,f=s.frame;if(!f)return;c.width=f.width;c.height=f.height;c.getContext('2d').drawImage(f,0,0);if(s.gray)mono(c);if(s.hairMask){let {mask,w,h}=s.hairMask,overlay=canvas(w,h),ox=overlay.getContext('2d'),im=ox.createImageData(w,h);for(let i=0;i<mask.length;i++)if(mask[i]){let j=i*4;im.data[j]=0;im.data[j+1]=220;im.data[j+2]=180;im.data[j+3]=65}ox.putImageData(im,0,0);c.getContext('2d').drawImage(overlay,0,0)}if(s.result?.patches){let ctx=c.getContext('2d');ctx.lineWidth=Math.max(1,c.width/700);const values=s.result.patches.map(z=>z[$('heatMetric')?.value==='D'?'dbc':'psd'].value).filter(Number.isFinite);const lo=Math.min(...values),hi=Math.max(...values);for(const item of s.result.patches){const r=item.roi,v=item[$('heatMetric')?.value==='D'?'dbc':'psd'].value,t=(v-lo)/(hi-lo||1);ctx.fillStyle='hsla('+Math.round(220-220*t)+',90%,50%,0.25)';ctx.fillRect(r.x,r.y,r.w,r.h);ctx.strokeStyle='hsla('+Math.round(220-220*t)+',90%,60%,0.8)';ctx.strokeRect(r.x,r.y,r.w,r.h)}}if(s.roi){let r=s.roi,x=c.getContext('2d');x.strokeStyle='#00ffb3';x.lineWidth=Math.max(2,c.width/250);x.strokeRect(r.x,r.y,r.w,r.h)}}
+function heatStats(){
+ const key=$('heatMetric')?.value==='D'?'dbc':'psd';
+ const values=scenes.slice(0,count).flatMap(s=>s.result?.patches?.map(p=>p[key].value)||[]).filter(Number.isFinite);
+ return {key,lo:values.length?Math.min(...values):null,hi:values.length?Math.max(...values):null};
+}
+function heatLegend(){
+ const el=$('heatLegend');if(!el)return;
+ const {key,lo,hi}=heatStats();
+ if(lo===null){el.textContent='ヒートマップ：解析後に共通数値スケールを表示します';return}
+ el.replaceChildren();
+ const label=document.createElement('span');label.textContent=(key==='psd'?'PSD β':'DBC D')+'：全シーン共通スケール　';
+ const min=document.createElement('strong');min.textContent=lo.toFixed(4);
+ const bar=document.createElement('span');bar.style.cssText='display:inline-block;vertical-align:middle;width:210px;height:15px;margin:0 9px;background:linear-gradient(to right,hsl(220,90%,50%),hsl(165,90%,50%),hsl(110,90%,50%),hsl(55,90%,50%),hsl(0,90%,50%));border:1px solid #aab;';
+ const max=document.createElement('strong');max.textContent=hi.toFixed(4);
+ const note=document.createElement('span');note.textContent='　斜線枠：マスクに一部重なるが採用されなかったパッチ';
+ el.append(label,min,bar,max,note);
+}
+function draw(s){
+ let c=s.display,f=s.frame;if(!f)return;c.width=f.width;c.height=f.height;
+ const ctx=c.getContext('2d');ctx.drawImage(f,0,0);if(s.gray)mono(c);
+ if(s.hairMask){let {mask,w,h}=s.hairMask,overlay=canvas(w,h),ox=overlay.getContext('2d'),im=ox.createImageData(w,h);
+ for(let i=0;i<mask.length;i++)if(mask[i]){let j=i*4;im.data[j]=0;im.data[j+1]=220;im.data[j+2]=180;im.data[j+3]=65}
+ ox.putImageData(im,0,0);ctx.drawImage(overlay,0,0)}
+ if(s.result?.patches){
+ const {key,lo,hi}=heatStats();ctx.lineWidth=Math.max(1,c.width/700);
+ if($('showRejectedPatches')?.checked&&s.hairMask){
+ const side=Number(s.result.patchSize||$('patchSize').value);
+ const step=Math.max(1,Number(s.result.patchStep)||Math.floor(side*(1-Number($('patchOverlap').value)/100)));
+ const {mask,w,h}=s.hairMask;
+ const prefix=new Uint32Array((w+1)*(h+1));
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++)prefix[(y+1)*(w+1)+x+1]=mask[y*w+x]+prefix[y*(w+1)+x+1]+prefix[(y+1)*(w+1)+x]-prefix[y*(w+1)+x];
+ ctx.save();ctx.strokeStyle='rgba(255,105,105,.65)';ctx.setLineDash([Math.max(2,c.width/200),Math.max(2,c.width/200)]);
+ for(let y=0;y+side<=h;y+=step)for(let x=0;x+side<=w;x+=step){
+ const a=y*(w+1)+x,b=a+side,d=(y+side)*(w+1)+x+side,cc=(y+side)*(w+1)+x;
+ const pixels=prefix[d]-prefix[b]-prefix[cc]+prefix[a];
+ if(pixels>0&&pixels<side*side)ctx.strokeRect(x,y,side,side);
+ }
+ ctx.restore();
+ }
+ for(const item of s.result.patches){
+ const r=item.roi,v=item[key].value;
+ if(!Number.isFinite(v)){ctx.strokeStyle='#999';ctx.strokeRect(r.x,r.y,r.w,r.h);continue}
+ const t=Math.max(0,Math.min(1,(v-lo)/((hi-lo)||1))),hue=Math.round(220-220*t);
+ ctx.fillStyle='hsla('+hue+',90%,50%,0.25)';ctx.fillRect(r.x,r.y,r.w,r.h);
+ ctx.strokeStyle='hsla('+hue+',90%,60%,0.8)';ctx.strokeRect(r.x,r.y,r.w,r.h);
+ }
+ }
+ if(s.roi){let r=s.roi;ctx.strokeStyle='#00ffb3';ctx.lineWidth=Math.max(2,c.width/250);ctx.strokeRect(r.x,r.y,r.w,r.h)}
+}
+
 function render(){ $('scenes').replaceChildren();scenes.slice(0,count).forEach((s,i)=>{let p=document.createElement('div');p.className='panel';$('scenes').append(p);let title=document.createElement('h3');title.textContent=String.fromCharCode(65+i);p.append(title);let name=document.createElement('input');name.value=s.name;name.setAttribute('aria-label','シーン名');name.oninput=()=>{s.name=name.value;renderResults()};p.append(name);button('現在の入力を登録',()=>{try{let src=current?.type==='video'?$('video'):$('image');if(!current||!src.complete&&current.type==='image'||current.type==='video'&&(src.readyState<2||src.seeking))throw Error('入力の読み込み／シーク完了を待ってください');let w=src.videoWidth||src.naturalWidth,h=src.videoHeight||src.naturalHeight;if(!w||!h)throw Error('画像をデコードできません');s.frame=canvas(w,h);let ctx=s.frame.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,w,h);ctx.drawImage(src,0,0);s.file=current.file.name;s.time=current.type==='video'?src.currentTime:null;s.roi=null;s.hairMask=null;invalidate(s);draw(s)}catch(e){message(e.message)}},p);let g=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.checked=s.gray;check.onchange=()=>{s.gray=check.checked;draw(s)};g.append(check,'モノクロ表示');p.append(g);let vis=document.createElement('input');vis.type='checkbox';vis.checked=s.visible;vis.onchange=()=>{s.visible=vis.checked;renderResults()};p.append(vis,'曲線表示');button('ROI解除',()=>{s.roi=null;invalidate(s);draw(s)},p);button('削除',()=>{s.frame=null;s.roi=null;s.hairMask=null;invalidate(s);render()},p);button('次と入れ替え',()=>{let j=(i+1)%count;[scenes[i],scenes[j]]=[scenes[j],scenes[i]];render();renderResults()},p);let maskbar=document.createElement('div');maskbar.className='controls';p.append(maskbar);
  button('毛髪を自動抽出',()=>{if(!s.frame)return message('先に画像を登録してください');s.hairMask=hairMaskAuto(s.frame,maskHeightFraction());s.editMask=false;invalidate(s);draw(s);message('緑の領域を確認し、必要に応じてブラシで修正してください')},maskbar);
  let edit=document.createElement('input');edit.type='checkbox';edit.onchange=()=>s.editMask=edit.checked;maskbar.append(Object.assign(document.createElement('label'),{textContent:'ブラシ編集'}));maskbar.lastChild.prepend(edit);
@@ -77,12 +126,12 @@ $('source').onchange=()=>loadSource(+$('source').value);$('image').onload=()=>me
 $('run').onclick=()=>{let errors=[];const mode=$('analysisMode').value;for(let [i,s] of scenes.slice(0,count).entries()){invalidate(s);if(!s.frame)continue;try{let n=+$('resolution').value;const result=mode==='single'?runSingleMode(s,n):mode==='patch'?runPatchMode(s,n):runMaskMode(s,n);s.roiCanvas=result.roiCanvas||null;s.result={file:s.file,time:s.time,resolution:result.analysisN||n,mode,...result};}catch(e){errors.push(String.fromCharCode(65+i)+': '+e.message)}}render();renderResults();message(errors.length?errors.join(' / '):'解析完了（'+$('analysisMode').selectedOptions[0].text+'）。')};
 
 function graph(id){let c=$(id),x=c.getContext('2d');x.fillStyle='#0d1a2b';x.fillRect(0,0,c.width,c.height);let entries=scenes.slice(0,count).map((s,i)=>({s,i,r:s.result?.[id]})).filter(o=>o.r&&o.s.visible),points=entries.flatMap(o=>o.r.points);if(!points.length)return;let xs=points.map(p=>p[0]),ys=points.map(p=>p[1]),a=Math.min(...xs),b=Math.max(...xs),d=Math.min(...ys),e=Math.max(...ys);let px=v=>75+(v-a)/(b-a||1)*690,py=v=>360-(v-d)/(e-d||1)*250;x.strokeStyle='#52657d';x.strokeRect(75,110,690,250);x.font='12px sans-serif';x.fillStyle='white';for(let j=0;j<=4;j++){let xx=a+(b-a)*j/4,yy=d+(e-d)*j/4;x.fillText((10**xx).toPrecision(3),px(xx)-15,385);x.fillText((10**yy).toPrecision(3),5,py(yy))}x.fillText(id==='psd'?'frequency (cycles/pixel) / power — log axes':'1/r / N(r) — log axes',75,420);entries.forEach(({s,i,r},j)=>{x.strokeStyle=x.fillStyle=colors[i];x.setLineDash([]);x.beginPath();r.points.forEach(([u,v],k)=>k?x.lineTo(px(u),py(v)):x.moveTo(px(u),py(v)));x.stroke();if($('fits').checked&&r.fit.slope!==null){x.setLineDash([6,4]);x.beginPath();r.fitRange.forEach((u,k)=>k?x.lineTo(px(u),py(r.fit.slope*u+r.fit.intercept)):x.moveTo(px(u),py(r.fit.slope*u+r.fit.intercept)));x.stroke()}if($('legend').checked)x.fillText(String.fromCharCode(65+i)+' '+s.name,75+(j%3)*235,20+Math.floor(j/3)*25)});x.setLineDash([])}
-const fmt=v=>Number.isFinite(v)?v.toFixed(4):'—';function renderResults(){$('results').replaceChildren();scenes.slice(0,count).forEach((s,i)=>{let tr=document.createElement('tr'),r=s.result;for(let v of [String.fromCharCode(65+i)+' '+s.name,s.file? s.file+(s.time===null?'':' @ '+s.time.toFixed(3)+'s'):'未登録',fmt(r?.psd.value),fmt(r?.psd.fit.r2),fmt(r?.dbc.value),fmt(r?.dbc.fit.r2),r?.mode||'—',r?.patchCount??'—',fmt(r?.psdSD),fmt(r?.dbcSD)]){let td=document.createElement('td');td.textContent=v;tr.append(td)}$('results').append(tr)});graph('psd');graph('dbc');let c=$('metrics'),x=c.getContext('2d');x.fillStyle='#0d1a2b';x.fillRect(0,0,c.width,c.height);x.font='14px sans-serif';scenes.slice(0,count).forEach((s,i)=>{x.fillStyle=colors[i];x.fillText(String.fromCharCode(65+i),25+i*108,25);['psd','dbc'].forEach((k,j)=>{let v=s.result?.[k]?.value;x.fillText((j?'D ':'β ')+fmt(v),25+i*108,55+j*110);if(Number.isFinite(v))x.fillRect(25+i*108,85+j*110,Math.min(90,Math.abs(v)*15),12)})})}
+const fmt=v=>Number.isFinite(v)?v.toFixed(4):'—';function renderResults(){heatLegend();$('results').replaceChildren();scenes.slice(0,count).forEach((s,i)=>{let tr=document.createElement('tr'),r=s.result;for(let v of [String.fromCharCode(65+i)+' '+s.name,s.file? s.file+(s.time===null?'':' @ '+s.time.toFixed(3)+'s'):'未登録',fmt(r?.psd.value),fmt(r?.psd.fit.r2),fmt(r?.dbc.value),fmt(r?.dbc.fit.r2),r?.mode||'—',r?.patchCount??'—',fmt(r?.psdSD),fmt(r?.dbcSD)]){let td=document.createElement('td');td.textContent=v;tr.append(td)}$('results').append(tr)});graph('psd');graph('dbc');let c=$('metrics'),x=c.getContext('2d');x.fillStyle='#0d1a2b';x.fillRect(0,0,c.width,c.height);x.font='14px sans-serif';scenes.slice(0,count).forEach((s,i)=>{x.fillStyle=colors[i];x.fillText(String.fromCharCode(65+i),25+i*108,25);['psd','dbc'].forEach((k,j)=>{let v=s.result?.[k]?.value;x.fillText((j?'D ':'β ')+fmt(v),25+i*108,55+j*110);if(Number.isFinite(v))x.fillRect(25+i*108,85+j*110,Math.min(90,Math.abs(v)*15),12)})})}
 $('legend').onchange=$('fits').onchange=renderResults;
 function save(name,data,type){let u=URL.createObjectURL(new Blob([data],{type})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),10000)}function saveCanvas(c,name){c.toBlob(b=>b&&save(name,b,'image/png'))}
 $('maskHeight').addEventListener('input',()=>{$('maskHeightValue').textContent=$('maskHeight').value+'%'});
 $('maskHeight').addEventListener('change',()=>message('抽出高さを'+$('maskHeight').value+'%に設定しました。既存のマスクは保持されます。変更を反映するには「毛髪を自動抽出」を再実行してください。動画時系列解析には新しい設定が適用されます。'));
-$('heatMetric').onchange=()=>{scenes.forEach(s=>s.display&&draw(s))};
+$('heatMetric').onchange=()=>{heatLegend();scenes.forEach(s=>s.display&&draw(s))};$('showRejectedPatches').onchange=()=>scenes.forEach(s=>s.display&&draw(s));
 $('compareSizes').onclick=()=>{const out=[];for(let [i,s] of scenes.slice(0,count).entries()){if(!s.frame||!s.hairMask)continue;try{for(const r of comparePatchSizes(s))out.push({scene:String.fromCharCode(65+i),...r})}catch(e){message(String.fromCharCode(65+i)+': '+e.message)}}window.sizeComparison=out;const box=$('sizeResults');box.replaceChildren();if(!out.length)return message('比較対象がありません。毛髪マスクを確認してください');const table=document.createElement('table'),head=document.createElement('tr');for(const k of ['scene','size','patchCount','coverage','beta','betaSD','D','DSD','psdR2','dbcR2','dbcScales']){let th=document.createElement('th');th.textContent=k;head.append(th)}table.append(head);for(const r of out){let tr=document.createElement('tr');for(const k of ['scene','size','patchCount','coverage','beta','betaSD','D','DSD','psdR2','dbcR2','dbcScales']){let td=document.createElement('td');td.textContent=typeof r[k]==='number'?Number(r[k].toFixed(5)):r[k];tr.append(td)}table.append(tr)}box.append(table);message('64px・128pxを元解像度で比較しました。比較は同一スケール推定ではありません。')};
 $('compareCommon').onclick=()=>{
  const out=[],patchRows=[],errors=[];
