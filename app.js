@@ -40,6 +40,16 @@ function maskBrush(s,x,y,add,radius){
  if(!s.hairMask)return;const {mask,w,h}=s.hairMask,r=Math.max(2,radius),x0=Math.max(0,Math.floor(x-r)),x1=Math.min(w-1,Math.ceil(x+r)),y0=Math.max(0,Math.floor(y-r)),y1=Math.min(h-1,Math.ceil(y+r));
  for(let yy=y0;yy<=y1;yy++)for(let xx=x0;xx<=x1;xx++)if((xx-x)**2+(yy-y)**2<=r*r)mask[yy*w+xx]=add?1:0;
 }
+function toggleMaskGridCell(s,x,y,side){
+ if(!s.hairMask)return;
+ const {mask,w,h}=s.hairMask;
+ const gx=Math.floor(x/side)*side,gy=Math.floor(y/side)*side;
+ if(gx<0||gy<0||gx+side>w||gy+side>h)return;
+ let on=0;
+ for(let yy=gy;yy<gy+side;yy++)for(let xx=gx;xx<gx+side;xx++)on+=mask[yy*w+xx];
+ const next=on<side*side/2?1:0;
+ for(let yy=gy;yy<gy+side;yy++)mask.fill(next,yy*w+gx,yy*w+gx+side);
+}
 function maskInteriorSquare(s,n){
  const {mask,w,h}=s.hairMask;
  const inset=Math.max(4,Math.round(Math.min(w,h)*.015));
@@ -124,19 +134,31 @@ function draw(s,options={}){
  ctx.strokeStyle='hsla('+hue+',90%,60%,0.8)';ctx.strokeRect(r.x,r.y,r.w,r.h);
  }
  }
+ if(s.editMask&&s.maskEditMode==='grid'&&s.hairMask&&!options.export){
+ const side=Number($('patchSize').value),{mask,w,h}=s.hairMask;
+ ctx.save();ctx.lineWidth=Math.max(1,c.width/800);
+ for(let y=0;y+side<=h;y+=side)for(let x=0;x+side<=w;x+=side){
+ let selected=0;for(let yy=y;yy<y+side;yy++)for(let xx=x;xx<x+side;xx++)selected+=mask[yy*w+xx];
+ if(selected===0){ctx.strokeStyle='rgba(255,110,110,.85)';ctx.setLineDash([5,3])}
+ else if(selected===side*side){ctx.strokeStyle='rgba(0,255,180,.9)';ctx.setLineDash([])}
+ else{ctx.strokeStyle='rgba(255,215,0,.95)';ctx.setLineDash([3,2])}
+ ctx.strokeRect(x+.5,y+.5,side-1,side-1);
+ }ctx.restore();
+ }
  if(s.roi){let r=s.roi;ctx.strokeStyle='#00ffb3';ctx.lineWidth=Math.max(2,c.width/250);ctx.strokeRect(r.x,r.y,r.w,r.h)}
- if(s.editMask&&s.hairMask&&!options.export){ctx.save();ctx.fillStyle='rgba(5,12,25,.8)';ctx.fillRect(6,6,Math.min(c.width-12,345),31);ctx.fillStyle='#fff';ctx.font='bold 14px sans-serif';ctx.fillText('緑＝選択済み ／ 赤＝未選択（ブラシ編集）',13,27);ctx.restore()}
+ if(s.editMask&&s.hairMask&&!options.export){ctx.save();ctx.fillStyle='rgba(5,12,25,.8)';ctx.fillRect(6,6,Math.min(c.width-12,345),31);ctx.fillStyle='#fff';ctx.font='bold 14px sans-serif';ctx.fillText(s.maskEditMode==='grid'?'クリックでマスをON/OFF（緑／赤）':'緑＝選択済み ／ 赤＝未選択（ブラシ編集）',13,27);ctx.restore()}
  drawSceneLegend(s);
 }
 
 function render(){ $('scenes').replaceChildren();scenes.slice(0,count).forEach((s,i)=>{let p=document.createElement('div');p.className='panel';$('scenes').append(p);let title=document.createElement('h3');title.textContent=String.fromCharCode(65+i);p.append(title);let name=document.createElement('input');name.value=s.name;name.setAttribute('aria-label','シーン名');name.oninput=()=>{s.name=name.value;renderResults()};p.append(name);button('現在の入力を登録',()=>{try{let src=current?.type==='video'?$('video'):$('image');if(!current||!src.complete&&current.type==='image'||current.type==='video'&&(src.readyState<2||src.seeking))throw Error('入力の読み込み／シーク完了を待ってください');let w=src.videoWidth||src.naturalWidth,h=src.videoHeight||src.naturalHeight;if(!w||!h)throw Error('画像をデコードできません');s.frame=canvas(w,h);let ctx=s.frame.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,w,h);ctx.drawImage(src,0,0);s.file=current.file.name;s.time=current.type==='video'?src.currentTime:null;s.roi=null;s.hairMask=null;invalidate(s);draw(s)}catch(e){message(e.message)}},p);let g=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.checked=s.gray;check.onchange=()=>{s.gray=check.checked;draw(s)};g.append(check,'モノクロ表示');p.append(g);let vis=document.createElement('input');vis.type='checkbox';vis.checked=s.visible;vis.onchange=()=>{s.visible=vis.checked;renderResults()};p.append(vis,'曲線表示');button('ROI解除',()=>{s.roi=null;invalidate(s);draw(s)},p);button('削除',()=>{s.frame=null;s.roi=null;s.hairMask=null;invalidate(s);render()},p);button('次と入れ替え',()=>{let j=(i+1)%count;[scenes[i],scenes[j]]=[scenes[j],scenes[i]];render();renderResults()},p);let maskbar=document.createElement('div');maskbar.className='controls';p.append(maskbar);
  button('毛髪を自動抽出',()=>{if(!s.frame)return message('先に画像を登録してください');s.hairMask=hairMaskAuto(s.frame,maskHeightFraction());s.editMask=false;invalidate(s);draw(s);message('緑の領域を確認し、必要に応じてブラシで修正してください')},maskbar);
- let edit=document.createElement('input');edit.type='checkbox';edit.onchange=()=>{s.editMask=edit.checked;draw(s)};maskbar.append(Object.assign(document.createElement('label'),{textContent:'ブラシ編集'}));maskbar.lastChild.prepend(edit);
+ let edit=document.createElement('input');edit.type='checkbox';edit.onchange=()=>{s.editMask=edit.checked;draw(s)};maskbar.append(Object.assign(document.createElement('label'),{textContent:'マスク編集'}));maskbar.lastChild.prepend(edit);
+ let editType=document.createElement('select');editType.add(new Option('マスをクリック ON/OFF','grid'));editType.add(new Option('ブラシで追加・削除','brush'));editType.value=s.maskEditMode||'grid';s.maskEditMode=editType.value;editType.onchange=()=>{s.maskEditMode=editType.value;draw(s)};maskbar.append(editType);
  let mode=document.createElement('select');mode.add(new Option('領域を追加','add'));mode.add(new Option('領域を削除','erase'));maskbar.append(mode);
  let radius=document.createElement('input');radius.type='range';radius.min='3';radius.max='90';radius.value='20';radius.title='ブラシ半径（元画像px）';maskbar.append(radius);
  button('毛髪内に正方形ROI',()=>{try{if(!s.hairMask)throw Error('先に毛髪を抽出してください');maskInteriorSquare(s,+$('resolution').value)}catch(e){message(e.message)}},maskbar);
  button('マスクPNG',()=>downloadMask(s,String.fromCharCode(65+i)+'_hair_mask.png'),maskbar);
- let info=document.createElement('div');info.style.cssText='margin:8px 0;color:#d9efff;font-size:14px';s.roiInfo=info;p.append(info);updateRoiInfo(s);let c=canvas(640,360);s.display=c;p.append(c);let legendCanvas=canvas(720,76);legendCanvas.style.cssText='display:block;width:100%;max-width:720px;height:auto;margin:4px 0 12px';legendCanvas.setAttribute('role','img');legendCanvas.setAttribute('aria-label','PSD βまたはDBC Dの全シーン共通数値凡例');s.legendCanvas=legendCanvas;p.append(legendCanvas);let start;const point=e=>{let r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(c.width,(e.clientX-r.left)*c.width/r.width)),y:Math.max(0,Math.min(c.height,(e.clientY-r.top)*c.height/r.height))}};c.onpointerdown=e=>{if(!s.frame)return;start=point(e);c.setPointerCapture(e.pointerId);if(s.editMask&&s.hairMask){maskBrush(s,start.x,start.y,mode.value==='add',+radius.value);invalidate(s);draw(s)}};c.onpointermove=e=>{if(!start)return;let q=point(e);if(s.editMask&&s.hairMask){maskBrush(s,q.x,q.y,mode.value==='add',+radius.value);invalidate(s);draw(s);return}let z=Math.min(Math.abs(q.x-start.x),Math.abs(q.y-start.y));s.roi={x:Math.round(Math.min(start.x,q.x)),y:Math.round(Math.min(start.y,q.y)),w:Math.floor(z),h:Math.floor(z)};if(q.x<start.x)s.roi.x=Math.round(start.x-z);if(q.y<start.y)s.roi.y=Math.round(start.y-z);invalidate(s);draw(s)};c.onpointerup=c.onpointercancel=()=>{start=null;draw(s)};draw(s);updateRoiInfo(s);updateRoiInfo(s);if(s.roiCanvas){let preview=canvas(s.roiCanvas.width,s.roiCanvas.height);preview.getContext('2d').drawImage(s.roiCanvas,0,0);p.append('解析入力（保存PNGと同じ）',preview);button('ROI PNG',()=>saveCanvas(s.roiCanvas,String.fromCharCode(65+i)+'_roi.png'),p)}})}
+ let info=document.createElement('div');info.style.cssText='margin:8px 0;color:#d9efff;font-size:14px';s.roiInfo=info;p.append(info);updateRoiInfo(s);let c=canvas(640,360);s.display=c;p.append(c);let legendCanvas=canvas(720,76);legendCanvas.style.cssText='display:block;width:100%;max-width:720px;height:auto;margin:4px 0 12px';legendCanvas.setAttribute('role','img');legendCanvas.setAttribute('aria-label','PSD βまたはDBC Dの全シーン共通数値凡例');s.legendCanvas=legendCanvas;p.append(legendCanvas);let start;const point=e=>{let r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(c.width,(e.clientX-r.left)*c.width/r.width)),y:Math.max(0,Math.min(c.height,(e.clientY-r.top)*c.height/r.height))}};c.onpointerdown=e=>{if(!s.frame)return;start=point(e);c.setPointerCapture(e.pointerId);if(s.editMask&&s.hairMask){if(s.maskEditMode==='grid'){toggleMaskGridCell(s,start.x,start.y,+$('patchSize').value);start=null}else{maskBrush(s,start.x,start.y,mode.value==='add',+radius.value)}invalidate(s);draw(s)}};c.onpointermove=e=>{if(!start)return;let q=point(e);if(s.editMask&&s.hairMask){if(s.maskEditMode==='grid')return;maskBrush(s,q.x,q.y,mode.value==='add',+radius.value);invalidate(s);draw(s);return}let z=Math.min(Math.abs(q.x-start.x),Math.abs(q.y-start.y));s.roi={x:Math.round(Math.min(start.x,q.x)),y:Math.round(Math.min(start.y,q.y)),w:Math.floor(z),h:Math.floor(z)};if(q.x<start.x)s.roi.x=Math.round(start.x-z);if(q.y<start.y)s.roi.y=Math.round(start.y-z);invalidate(s);draw(s)};c.onpointerup=c.onpointercancel=()=>{start=null;draw(s)};draw(s);updateRoiInfo(s);updateRoiInfo(s);if(s.roiCanvas){let preview=canvas(s.roiCanvas.width,s.roiCanvas.height);preview.getContext('2d').drawImage(s.roiCanvas,0,0);p.append('解析入力（保存PNGと同じ）',preview);button('ROI PNG',()=>saveCanvas(s.roiCanvas,String.fromCharCode(65+i)+'_roi.png'),p)}})}
 for(let i=2;i<=9;i++)$('count').add(new Option(String(i),String(i)));$('count').value=String(count);$('count').onchange=()=>{count=+$('count').value;render();renderResults()};$('gray').onchange=()=>{scenes.forEach(s=>s.gray=$('gray').checked);render()};$('resolution').onchange=()=>{scenes.forEach(invalidate);render()};
 $('files').onchange=e=>{for(let file of e.target.files){let type=file.type.startsWith('video/')||/\.(mov|mp4|m4v|webm)$/i.test(file.name)?'video':'image';sources.push({file,type,url:URL.createObjectURL(file)});$('source').add(new Option(file.name,sources.length-1))}if(sources.length)loadSource(+$('source').value)};
 function loadSource(i){current=sources[i];$('video').pause();$('video').removeAttribute('src');$('image').removeAttribute('src');$('video').hidden=current.type!=='video';$('image').hidden=current.type!=='image';$(current.type).src=current.url;message('読み込み中: '+current.file.name)}
